@@ -1,7 +1,11 @@
 package com.example.jwttest.controller;
 
 import com.example.jwttest.entity.AuthRequest;
+import com.example.jwttest.entity.RefreshTokenEntity;
+import com.example.jwttest.entity.TokenRequest;
+import com.example.jwttest.entity.TokenResponse;
 import com.example.jwttest.entity.UserInfo;
+import com.example.jwttest.repository.TokenRepository;
 import com.example.jwttest.service.JwtService;
 import com.example.jwttest.service.UserInfoService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,7 +20,6 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-
 import java.util.Collection;
 
 @RestController
@@ -32,6 +35,9 @@ public class UserController {
     @Autowired
     private AuthenticationManager authenticationManager;
 
+    @Autowired
+    private TokenRepository tokenRepository;
+
     @GetMapping("/welcome")
     public String welcome() {
         System.out.println("welcome endpoint"); // TODO: remove this line
@@ -45,17 +51,41 @@ public class UserController {
     }
 
     @PostMapping("/createToken")
-    public String addToken(@RequestBody AuthRequest authRequest) {
-        System.out.println("trying to generate token"); // TODO: remove this line
+    public TokenResponse createToken(@RequestBody AuthRequest authRequest) {
         Authentication authentication = authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(authRequest.getUsername(), authRequest.getPassword())
-        );
+                new UsernamePasswordAuthenticationToken(authRequest.getUsername(), authRequest.getPassword()));
 
         if (authentication.isAuthenticated()) {
             Collection<? extends GrantedAuthority> authorities = authentication.getAuthorities();
-            return jwtService.generateToken(authRequest.getUsername(), authorities);
+            String accessToken = jwtService.generateAccessToken(authRequest.getUsername(), authorities);
+
+            // Generate refresh token
+            UserInfo user = service.loadUserInfoByUsername(authRequest.getUsername());
+            String refreshToken = jwtService.generateRefreshToken(user);
+
+            // Store the refresh token
+            tokenRepository.save(new RefreshTokenEntity(user, refreshToken));
+            return new TokenResponse(accessToken, refreshToken);
         } else {
-            throw new UsernameNotFoundException("invalid user request !");
+            throw new UsernameNotFoundException("Invalid user request!");
+        }
+    }
+
+    @PostMapping("/refreshToken")
+    public TokenResponse refreshToken(@RequestBody TokenRequest tokenRequest) throws Exception {
+        String oldRefreshToken = tokenRequest.getRefreshToken();
+
+        // Validate and remove the old refresh token from the database
+        if (tokenRepository.validateAndRemove(oldRefreshToken)) {
+            String newAccessToken = jwtService.generateAccessTokenFromRefreshToken(oldRefreshToken);
+            UserInfo user = service.loadUserInfoByUsername(tokenRequest.getUsername());
+            String newRefreshToken = jwtService.generateRefreshToken(user);
+            // Store the new refresh token in  database and map it to the user
+            tokenRepository.save(new RefreshTokenEntity(user, newRefreshToken));
+
+            return new TokenResponse(newAccessToken, newRefreshToken);
+        } else {
+            throw new Exception("Invalid refresh token!");
         }
     }
 
