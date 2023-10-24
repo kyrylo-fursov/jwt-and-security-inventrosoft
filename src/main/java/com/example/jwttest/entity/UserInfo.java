@@ -1,4 +1,4 @@
-package com.example.jwttest.model;
+package com.example.jwttest.entity;
 
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;

@@ -1,5 +1,7 @@
-package com.example.jwttest;
+package com.example.jwttest.filter;
 
+import com.example.jwttest.service.JwtService;
+import com.example.jwttest.service.UserInfoService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
