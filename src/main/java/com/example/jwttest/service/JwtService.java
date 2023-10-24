@@ -1,4 +1,4 @@
-package com.example.jwttest;
+package com.example.jwttest.service;
 
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
