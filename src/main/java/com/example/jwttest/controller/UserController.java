@@ -5,99 +5,150 @@ import com.example.jwttest.entity.RefreshTokenEntity;
 import com.example.jwttest.entity.TokenRequest;
 import com.example.jwttest.entity.TokenResponse;
 import com.example.jwttest.entity.UserInfo;
-import com.example.jwttest.repository.TokenRepository;
+import com.example.jwttest.exception.InvalidTokenException;
+import com.example.jwttest.repository.RefreshTokenRepository;
 import com.example.jwttest.service.JwtService;
 import com.example.jwttest.service.UserInfoService;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.core.GrantedAuthority;
-import org.springframework.security.core.userdetails.UsernameNotFoundException;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import java.util.Collection;
 
 @RestController
 @RequestMapping("/auth")
 public class UserController {
+    private final UserInfoService userInfoService;
+    private final JwtService jwtService;
+    private final AuthenticationManager authenticationManager;
+    private final RefreshTokenRepository refreshTokenRepository;
 
-    @Autowired
-    private UserInfoService service;
-
-    @Autowired
-    private JwtService jwtService;
-
-    @Autowired
-    private AuthenticationManager authenticationManager;
-
-    @Autowired
-    private TokenRepository tokenRepository;
+    public UserController(RefreshTokenRepository refreshTokenRepository,
+                          AuthenticationManager authenticationManager,
+                          JwtService jwtService,
+                          UserInfoService userInfoService) {
+        this.refreshTokenRepository = refreshTokenRepository;
+        this.authenticationManager = authenticationManager;
+        this.jwtService = jwtService;
+        this.userInfoService = userInfoService;
+    }
 
     @GetMapping("/welcome")
-    public String welcome() {
-        System.out.println("welcome endpoint"); // TODO: remove this line
-        return "Welcome this endpoint is not secure";
+    public ResponseEntity<String> welcome() {
+        return new ResponseEntity<>("Welcome, this endpoint is not secure", HttpStatus.OK);
     }
 
-    @PostMapping("/addNewUser")
-    public String addNewUser(@RequestBody UserInfo userInfo) {
-        System.out.println("trying to add new user : " + userInfo); // TODO: remove this line
-        return service.addUser(userInfo);
-    }
-
-    @PostMapping("/createToken")
-    public TokenResponse createToken(@RequestBody AuthRequest authRequest) {
-        Authentication authentication = authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(authRequest.getUsername(), authRequest.getPassword()));
-
-        if (authentication.isAuthenticated()) {
-            Collection<? extends GrantedAuthority> authorities = authentication.getAuthorities();
-            String accessToken = jwtService.generateAccessToken(authRequest.getUsername(), authorities);
-
-            // Generate refresh token
-            UserInfo user = service.loadUserInfoByUsername(authRequest.getUsername());
-            String refreshToken = jwtService.generateRefreshToken(user);
-
-            // Store the refresh token
-            tokenRepository.save(new RefreshTokenEntity(user, refreshToken));
-            return new TokenResponse(accessToken, refreshToken);
+    @PostMapping("/register")
+    public ResponseEntity<String> addNewUser(@RequestBody UserInfo userInfo) {
+        String result = userInfoService.addUser(userInfo);
+        if (result != null) {
+            return new ResponseEntity<>(result, HttpStatus.CREATED);
         } else {
-            throw new UsernameNotFoundException("Invalid user request!");
+            return new ResponseEntity<>("User could not be created", HttpStatus.BAD_REQUEST);
         }
+    }
+
+    @PostMapping("/login")
+    public ResponseEntity<TokenResponse> createToken(@RequestBody AuthRequest authRequest) {
+        try {
+            UserInfo user = userInfoService.loadUserInfoByUsername(authRequest.getUsername());
+            Authentication authentication = authenticateUser(authRequest);
+            String accessToken = generateAccessToken(authentication, authRequest);
+            String refreshToken = generateRefreshToken(user);
+            saveRefreshToken(refreshToken, user);
+            return new ResponseEntity<>(new TokenResponse(accessToken, refreshToken), HttpStatus.OK);
+        } catch (AuthenticationException e) {
+            return new ResponseEntity<>(null, HttpStatus.UNAUTHORIZED);
+        }
+    }
+
+    private Authentication authenticateUser(AuthRequest authRequest) {
+        return authenticationManager.authenticate(
+                new UsernamePasswordAuthenticationToken(authRequest.getUsername(), authRequest.getPassword()));
+    }
+
+    private String generateAccessToken(Authentication authentication, AuthRequest authRequest) {
+        return jwtService.generateAccessToken(authRequest.getUsername(), authentication.getAuthorities());
+    }
+
+    private String generateRefreshToken(UserInfo user) {
+        return jwtService.generateRefreshToken(user);
+    }
+
+    private void saveRefreshToken(String refreshToken, UserInfo user) {
+        refreshTokenRepository.deleteByUser(user);
+        refreshTokenRepository.save(new RefreshTokenEntity(user, refreshToken));
     }
 
     @PostMapping("/refreshToken")
-    public TokenResponse refreshToken(@RequestBody TokenRequest tokenRequest) throws Exception {
-        String oldRefreshToken = tokenRequest.getRefreshToken();
+    public ResponseEntity<?> refreshToken(@RequestBody TokenRequest tokenRequest) {
+        try {
+            // Validate and remove old token
+            UserInfo userFromDB = getUserByToken(tokenRequest.getRefreshToken());
+            validateUser(userFromDB, tokenRequest);
+            removeToken(tokenRequest.getRefreshToken());
 
-        // Validate and remove the old refresh token from the database
-        if (tokenRepository.validateAndRemove(oldRefreshToken)) {
-            String newAccessToken = jwtService.generateAccessTokenFromRefreshToken(oldRefreshToken);
-            UserInfo user = service.loadUserInfoByUsername(tokenRequest.getUsername());
-            String newRefreshToken = jwtService.generateRefreshToken(user);
-            // Store the new refresh token in  database and map it to the user
-            tokenRepository.save(new RefreshTokenEntity(user, newRefreshToken));
+            // Generate new tokens
+            UserInfo user = userInfoService.loadUserInfoByUsername(tokenRequest.getUsername());
+            String newAccessToken = generateAccessTokenFromRefreshToken(tokenRequest);
+            String newRefreshToken = generateRefreshToken(user);
+            saveNewRefreshToken(newRefreshToken, user);
 
-            return new TokenResponse(newAccessToken, newRefreshToken);
-        } else {
-            throw new Exception("Invalid refresh token!");
+            return ResponseEntity.ok(new TokenResponse(newAccessToken, newRefreshToken));
+        } catch (InvalidTokenException e) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid refresh token");
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(e.getMessage());
         }
     }
 
+    private UserInfo getUserByToken(String refreshToken) throws InvalidTokenException {
+        UserInfo userFromDB = refreshTokenRepository.findUserByToken(refreshToken);
+        if (userFromDB == null) {
+            throw new InvalidTokenException("Invalid refresh token");
+        }
+        return userFromDB;
+    }
+
+    private void validateUser(UserInfo userFromDB, TokenRequest tokenRequest) throws InvalidTokenException {
+        if (!userFromDB.getName().equals(tokenRequest.getUsername())) {
+            throw new InvalidTokenException("User mismatch or invalid token");
+        }
+    }
+
+    private void removeToken(String refreshToken) throws InvalidTokenException {
+        boolean isValid = refreshTokenRepository.validateAndRemove(refreshToken);
+        if (!isValid) {
+            throw new InvalidTokenException("Invalid refresh token");
+        }
+    }
+
+    private String generateAccessTokenFromRefreshToken(TokenRequest tokenRequest) {
+        return jwtService.generateAccessTokenFromRefreshToken(tokenRequest.getRefreshToken());
+    }
+
+
+    private void saveNewRefreshToken(String newRefreshToken, UserInfo user) {
+        refreshTokenRepository.save(new RefreshTokenEntity(user, newRefreshToken));
+    }
+
+
     @GetMapping("/user/userProfile")
     @PreAuthorize("hasAuthority('ROLE_USER')")
-    public String userProfile() {
-        return "Welcome to User Profile";
+    public ResponseEntity<String> userProfile() {
+        return new ResponseEntity<>("Welcome to User Profile", HttpStatus.OK);
     }
 
     @GetMapping("/admin/adminProfile")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
-    public String adminProfile() {
-        return "Welcome to Admin Profile";
+    public ResponseEntity<String> adminProfile() {
+        return new ResponseEntity<>("Welcome to Admin Profile", HttpStatus.OK);
     }
 }

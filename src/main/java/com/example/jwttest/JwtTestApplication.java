@@ -1,5 +1,6 @@
 package com.example.jwttest;
 
+import com.example.jwttest.entity.UserInfo;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
@@ -9,3 +10,4 @@ public class JwtTestApplication {
 		SpringApplication.run(JwtTestApplication.class, args);
 	}
 }
+
