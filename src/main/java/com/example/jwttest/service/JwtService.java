@@ -10,7 +10,6 @@ import io.jsonwebtoken.security.Keys;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
-import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Component;
 import java.security.Key;
@@ -64,15 +63,18 @@ public class JwtService {
     }
 
     public List<GrantedAuthority> getAuthoritiesByUsername(String username) {
-        Optional<UserInfo> userInfo = repository.findByName(username);
-        if (userInfo.isPresent()) {
-            String roles = userInfo.get().getRoles();
-            return Arrays.stream(roles.split(","))
-                    .map(String::trim)
-                    .map(SimpleGrantedAuthority::new)
-                    .collect(Collectors.toList());
+        Optional<UserInfo> userInfoOptional = repository.findByName(username);
+
+        if (!userInfoOptional.isPresent()) {
+            throw new UsernameNotFoundException("User not found: " + username);
         }
-        throw new UsernameNotFoundException("User not found: " + username);
+
+        UserInfo userInfo = userInfoOptional.get();
+        String roles = userInfo.getRoles();
+        return Arrays.stream(roles.split(","))
+                .map(String::trim)
+                .map(SimpleGrantedAuthority::new)
+                .collect(Collectors.toList());
     }
 
     private String createToken(Map<String, Object> claims, String userName) {
@@ -85,7 +87,7 @@ public class JwtService {
                 .compact();
     }
 
-    private Key getSignKey() {
+    public Key getSignKey() {
         byte[] keyBytes= Decoders.BASE64.decode(secretKey);
         return Keys.hmacShaKeyFor(keyBytes);
     }
@@ -116,8 +118,7 @@ public class JwtService {
         return extractExpiration(token).before(new Date());
     }
 
-    public Boolean validateToken(String token, UserDetails userDetails) {
-        final String username = extractUsername(token);
-        return (username.equals(userDetails.getUsername()) && !isTokenExpired(token));
+    public Boolean validateToken(String token) {
+        return !isTokenExpired(token);
     }
 }

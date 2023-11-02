@@ -46,6 +46,7 @@ public class SecurityConfig {
                 .requestMatchers("/h2-console/**").permitAll() // Allow H2 console
                 .requestMatchers("/auth/user/**").authenticated()
                 .requestMatchers("/auth/admin/**").authenticated()
+                .anyRequest().authenticated()
                 .and()
                 .headers()
                 .frameOptions().sameOrigin()

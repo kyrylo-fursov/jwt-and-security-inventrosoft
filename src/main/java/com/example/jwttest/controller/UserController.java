@@ -9,6 +9,7 @@ import com.example.jwttest.exception.InvalidTokenException;
 import com.example.jwttest.repository.RefreshTokenRepository;
 import com.example.jwttest.service.JwtService;
 import com.example.jwttest.service.UserInfoService;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -47,16 +48,23 @@ public class UserController {
 
     @PostMapping("/register")
     public ResponseEntity<String> addNewUser(@RequestBody UserInfo userInfo) {
-        String result = userInfoService.addUser(userInfo);
-        if (result != null) {
-            return new ResponseEntity<>(result, HttpStatus.CREATED);
-        } else {
-            return new ResponseEntity<>("User could not be created", HttpStatus.BAD_REQUEST);
+        try {
+            String result = userInfoService.addUser(userInfo);
+            if (result != null) {
+                return new ResponseEntity<>(result, HttpStatus.CREATED);
+            } else {
+                return new ResponseEntity<>("User could not be created because user == null", HttpStatus.BAD_REQUEST);
+            }
+        } catch (DataIntegrityViolationException e) {
+            return new ResponseEntity<>("Email already in use", HttpStatus.BAD_REQUEST);
         }
     }
 
     @PostMapping("/login")
     public ResponseEntity<TokenResponse> createToken(@RequestBody AuthRequest authRequest) {
+        if (authRequest == null || authRequest.getUsername() == null || authRequest.getPassword() == null) {
+            return new ResponseEntity<>(null, HttpStatus.BAD_REQUEST);
+        }
         try {
             UserInfo user = userInfoService.loadUserInfoByUsername(authRequest.getUsername());
             Authentication authentication = authenticateUser(authRequest);
@@ -97,9 +105,9 @@ public class UserController {
 
             // Generate new tokens
             UserInfo user = userInfoService.loadUserInfoByUsername(tokenRequest.getUsername());
-            String newAccessToken = generateAccessTokenFromRefreshToken(tokenRequest);
+            String newAccessToken = jwtService.generateAccessTokenFromRefreshToken(tokenRequest.getRefreshToken());
             String newRefreshToken = generateRefreshToken(user);
-            saveNewRefreshToken(newRefreshToken, user);
+            refreshTokenRepository.save(new RefreshTokenEntity(user, newRefreshToken));
 
             return ResponseEntity.ok(new TokenResponse(newAccessToken, newRefreshToken));
         } catch (InvalidTokenException e) {
@@ -117,6 +125,7 @@ public class UserController {
         return userFromDB;
     }
 
+    // Check refresh token is valid and belongs to the user that is requesting a new token
     private void validateUser(UserInfo userFromDB, TokenRequest tokenRequest) throws InvalidTokenException {
         if (!userFromDB.getName().equals(tokenRequest.getUsername())) {
             throw new InvalidTokenException("User mismatch or invalid token");
@@ -129,16 +138,6 @@ public class UserController {
             throw new InvalidTokenException("Invalid refresh token");
         }
     }
-
-    private String generateAccessTokenFromRefreshToken(TokenRequest tokenRequest) {
-        return jwtService.generateAccessTokenFromRefreshToken(tokenRequest.getRefreshToken());
-    }
-
-
-    private void saveNewRefreshToken(String newRefreshToken, UserInfo user) {
-        refreshTokenRepository.save(new RefreshTokenEntity(user, newRefreshToken));
-    }
-
 
     @GetMapping("/user/userProfile")
     @PreAuthorize("hasAuthority('ROLE_USER')")

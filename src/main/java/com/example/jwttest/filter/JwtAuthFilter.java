@@ -34,32 +34,68 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     @Lazy
     private UserInfoService userDetailsService;
 
+//    @Override
+//    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
+//            throws ServletException, IOException {
+//        String authHeader = request.getHeader("Authorization");
+//        String token;
+//        String username;
+//
+//        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+//            token = authHeader.substring(7);
+//            username = jwtService.extractUsername(token);
+//
+//            if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+//                Claims claims = jwtService.extractAllClaims(token);
+//                List<GrantedAuthority> authorities = ((List<String>) claims.get("authorities")).stream()
+//                        .map(SimpleGrantedAuthority::new)
+//                        .collect(Collectors.toList());
+//
+//                UserDetails userDetails = userDetailsService.loadUserByUsername(username);
+//
+//                if (jwtService.validateToken(token, userDetails)) {
+//                    UsernamePasswordAuthenticationToken authToken =
+//                            new UsernamePasswordAuthenticationToken(userDetails, null, authorities);
+//                    authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+//                    SecurityContextHolder.getContext().setAuthentication(authToken);
+//                }
+//            }
+//        }
+//        filterChain.doFilter(request, response);
+//    }
+
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
         String authHeader = request.getHeader("Authorization");
-        String token;
-        String username;
 
-        if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            token = authHeader.substring(7);
-            username = jwtService.extractUsername(token);
-
-            if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+        try {
+            if (authHeader != null && authHeader.startsWith("Bearer ")) {
+                String token = authHeader.substring(7);
                 Claims claims = jwtService.extractAllClaims(token);
-                List<GrantedAuthority> authorities = ((List<String>) claims.get("authorities")).stream()
-                        .map(SimpleGrantedAuthority::new)
-                        .collect(Collectors.toList());
+                String username = claims.getSubject(); // or claims.get("username", String.class)
 
-                UserDetails userDetails = userDetailsService.loadUserByUsername(username);
+                if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+                    List<GrantedAuthority> authorities = ((List<String>) claims.get("authorities")).stream()
+                            .map(SimpleGrantedAuthority::new)
+                            .collect(Collectors.toList());
 
-                if (jwtService.validateToken(token, userDetails)) {
-                    UsernamePasswordAuthenticationToken authToken =
-                            new UsernamePasswordAuthenticationToken(userDetails, null, authorities);
-                    authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-                    SecurityContextHolder.getContext().setAuthentication(authToken);
+                    if (jwtService.validateToken(token)) {
+                        UsernamePasswordAuthenticationToken authToken =
+                                new UsernamePasswordAuthenticationToken(username, null, authorities);
+                        authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                        SecurityContextHolder.getContext().setAuthentication(authToken);
+                    }
                 }
             }
+        } catch (io.jsonwebtoken.SignatureException e) {
+        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+        response.getWriter().write("Invalid token signature");
+        return;
+        } catch (Exception e) {
+        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        response.getWriter().write("Unauthorized");
+        return;
         }
         filterChain.doFilter(request, response);
     }
